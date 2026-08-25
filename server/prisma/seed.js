@@ -23,6 +23,19 @@ async function main() {
   await prisma.whatIfScenario.deleteMany({});
   await prisma.systemSetting.deleteMany({});
   await prisma.user.deleteMany({});
+  await prisma.manufacturer.deleteMany({});
+
+  // 0. Manufacturer
+  const manufacturer = await prisma.manufacturer.create({
+    data: {
+      name: 'Apex Dynamic Manufacturing Ltd.',
+      email: 'contact@apexindustries.in',
+      phone: '+91 98765 43210',
+      address: 'Industrial Area, Phase 1'
+    }
+  });
+
+  console.log('Manufacturer created:', manufacturer.name);
 
   // 1. Users
   const hashedPassword = await bcrypt.hash('admin123', 10);
@@ -31,7 +44,8 @@ async function main() {
       email: 'admin@profit.com',
       password: hashedPassword,
       name: 'Operations Director (Admin)',
-      role: 'admin'
+      role: 'manufacturer_admin',
+      manufacturerId: manufacturer.id
     }
   });
 
@@ -41,7 +55,8 @@ async function main() {
       email: 'user@profit.com',
       password: userPassword,
       name: 'Cost Estimator (User)',
-      role: 'user'
+      role: 'manufacturer',
+      manufacturerId: manufacturer.id
     }
   });
 
@@ -77,6 +92,7 @@ async function main() {
     const changePct = item.previousPrice ? (change / item.previousPrice) * 100 : 0;
     const rm = await prisma.rawMaterial.create({
       data: {
+        manufacturerId: manufacturer.id,
         name: item.name,
         category: item.category,
         unit: item.unit,
@@ -89,15 +105,14 @@ async function main() {
     });
     rawMaterials[item.name] = rm;
 
-    // Create 3 historical price data points for trend chart
     const d1 = new Date(); d1.setDate(d1.getDate() - 60);
-    const d2 = new Date(); d2.setDate(d2.getDate() - 30);
     const d3 = new Date(); d3.setDate(d3.getDate() - 5);
 
     await prisma.rawMaterialPriceHistory.createMany({
       data: [
         {
           rawMaterialId: rm.id,
+          manufacturerId: manufacturer.id,
           previousPrice: (item.previousPrice || item.currentPrice) * 0.92,
           newPrice: item.previousPrice || item.currentPrice,
           difference: (item.previousPrice || item.currentPrice) * 0.08,
@@ -106,6 +121,7 @@ async function main() {
         },
         {
           rawMaterialId: rm.id,
+          manufacturerId: manufacturer.id,
           previousPrice: item.previousPrice || item.currentPrice,
           newPrice: item.currentPrice,
           difference: change,
@@ -119,9 +135,9 @@ async function main() {
   console.log('10 Raw materials and price histories seeded.');
 
   // 4. Components
-  // Component 1: Metal Frame (2 kg Steel @ 100 = 200) -> exact match for demonstration requirement
   const metalFrame = await prisma.component.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Metal Frame Assembly',
       description: 'Precision welded tubular steel frame structure',
       additionalCost: 0,
@@ -135,13 +151,13 @@ async function main() {
     ]
   });
 
-  // Component 2: Ergonomic Seat Cushion (0.8 kg HDPE + 0.5 kg Rubber + additional ₹20 processing)
   const seatComponent = await prisma.component.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Ergonomic Contoured Seat',
       description: 'Molded high-density polymeric seat base with rubber cushioning',
       additionalCost: 20.0,
-      currentCost: 234.0, // (0.8*180 = 144) + (0.5*140 = 70) + 20 = 234
+      currentCost: 234.0, 
       previousCost: 225.0
     }
   });
@@ -152,13 +168,13 @@ async function main() {
     ]
   });
 
-  // Component 3: Reinforced Backrest (1 kg Steel + 100 ml Paint + 0.4 kg HDPE + additional ₹15)
   const backrestComponent = await prisma.component.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Reinforced Lumbar Backrest',
       description: 'High support spinal backrest with anti-corrosion coating',
       additionalCost: 15.0,
-      currentCost: 217.0, // (1*100 = 100) + (100ml of 300/L = 30) + (0.4*180 = 72) + 15 = 217
+      currentCost: 217.0, 
       previousCost: 210.0
     }
   });
@@ -170,13 +186,13 @@ async function main() {
     ]
   });
 
-  // Component 4: Heavy-Duty Caster Wheel Assembly (0.4 kg SS304 + 0.3 kg Rubber + ₹10)
   const wheelComponent = await prisma.component.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: '360° Industrial Wheel Assembly',
       description: 'Quad ball-bearing caster wheels with stainless steel housing',
       additionalCost: 10.0,
-      currentCost: 180.0, // (0.4*320 = 128) + (0.3*140 = 42) + 10 = 180
+      currentCost: 180.0, 
       previousCost: 175.0
     }
   });
@@ -187,13 +203,13 @@ async function main() {
     ]
   });
 
-  // Component 5: Modular Heavy Structure Body (2.5 kg Aluminium + 1 kg SS304 + 200 ml Paint + ₹50)
   const bodyComponent = await prisma.component.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Modular Aluminium Chassis Frame',
       description: 'Lightweight high tensile architectural frame body',
       additionalCost: 50.0,
-      currentCost: 1055.0, // (2.5*250 = 625) + (1*320 = 320) + (200ml of 300/L = 60) + 50 = 1055
+      currentCost: 1055.0,
       previousCost: 1020.0
     }
   });
@@ -208,11 +224,9 @@ async function main() {
   console.log('5 Components and BOMs seeded.');
 
   // 5. Products
-  // Product 1: "Product A (Demonstration Benchmarking)" -> Exact specifications from Section 47:
-  // Metal Frame (1 qty) = ₹200. Direct Labour ₹400, Machine ₹200, Overhead ₹150, Other ₹50 = Additional ₹800.
-  // Initial Manufacturing Cost = ₹1000. Markup = 20% -> Recommended Selling Price = ₹1200.
   const productA = await prisma.product.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Product A (Heavy Industrial Frame)',
       sku: 'PRD-IND-001',
       category: 'Industrial Furnishing',
@@ -241,13 +255,9 @@ async function main() {
     data: { productId: productA.id, componentId: metalFrame.id, quantity: 1.0, cost: 200.0 }
   });
 
-  // Product 2: Industrial Ergonomic Chair
-  // Metal Frame (1 = 200) + Seat (1 = 234) + Backrest (1 = 217) + Wheels (1 = 180) = Material Cost: ₹831
-  // Labour ₹120, Machine ₹40, Overhead ₹60, Packaging ₹25, Transport ₹20, Wastage 5% (₹41.55)
-  // Total Manufacturing Cost: 831 + 120 + 40 + 60 + 25 + 20 + 41.55 = ₹1137.55
-  // Markup: 25% -> Recommended: ₹1421.94
   const productChair = await prisma.product.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Executive Ergonomic Industrial Chair',
       sku: 'PRD-CHR-002',
       category: 'Seating & Ergonomics',
@@ -281,8 +291,6 @@ async function main() {
     ]
   });
 
-  // Packaging hierarchy for chair:
-  // Outer Master Carton: ₹120 (holds 8 units = ₹15/unit) + Inner protective foam bag: ₹10/unit = Total ₹25/unit
   const outerCarton = await prisma.packagingConfig.create({
     data: {
       productId: productChair.id,
@@ -290,7 +298,7 @@ async function main() {
       level: 0,
       unitCost: 120.0,
       unitsPerParent: 1,
-      productsPerUnit: 8 // holds 8 chairs = 15/chair
+      productsPerUnit: 8 
     }
   });
   await prisma.packagingConfig.create({
@@ -305,13 +313,9 @@ async function main() {
     }
   });
 
-  // Product 3: Heavy Duty Workstation Table
-  // Modular Body (1 = 1055) + Metal Frame (2 = 400) = Material Cost: ₹1455
-  // Labour ₹200, Machine ₹80, Overhead ₹100, Packaging ₹40, Wastage 3% (₹43.65)
-  // Total Manufacturing Cost: 1455 + 200 + 80 + 100 + 40 + 43.65 = ₹1918.65
-  // Profit Type: Margin 30% -> Recommended: 1918.65 / (1 - 0.3) = ₹2740.93
   const productTable = await prisma.product.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Modular Aluminium Workstation Table',
       sku: 'PRD-TBL-003',
       category: 'Workstations',
@@ -348,6 +352,7 @@ async function main() {
   // 6. Clients
   const clientA = await prisma.client.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Apex Industrial Solutions Ltd.',
       code: 'CLI-APEX-001',
       contact: 'Rajesh Sharma (Procurement Head)',
@@ -360,6 +365,7 @@ async function main() {
 
   const clientB = await prisma.client.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Bharat Manufacturing Enterprises',
       code: 'CLI-BME-002',
       contact: 'Sunil Verma (Operations Manager)',
@@ -372,6 +378,7 @@ async function main() {
 
   const clientC = await prisma.client.create({
     data: {
+      manufacturerId: manufacturer.id,
       name: 'Crestline Global Infrastructure',
       code: 'CLI-CGI-003',
       contact: 'Priya Sundaram (Supply Chain VP)',
@@ -384,20 +391,14 @@ async function main() {
 
   console.log('3 Clients seeded.');
 
-  // 7. Client Specific Pricing (Matching Section 48 requirement)
-  // For Product A (Cost = ₹1000 initially):
-  // Client A = ₹1100 (Profit ₹100)
-  // Client B = ₹1200 (Profit ₹200)
-  // Client C = ₹1300 (Profit ₹300)
+  // 7. Client Specific Pricing
   const clientPricesData = [
     { client: clientA, product: productA, price: 1100.0, cost: 1000.0 },
     { client: clientB, product: productA, price: 1200.0, cost: 1000.0 },
     { client: clientC, product: productA, price: 1300.0, cost: 1000.0 },
-    // Chair pricing
     { client: clientA, product: productChair, price: 1450.0, cost: 1137.55 },
     { client: clientB, product: productChair, price: 1520.0, cost: 1137.55 },
     { client: clientC, product: productChair, price: 1650.0, cost: 1137.55 },
-    // Table pricing
     { client: clientA, product: productTable, price: 2800.0, cost: 1968.65 },
     { client: clientB, product: productTable, price: 2950.0, cost: 1968.65 },
     { client: clientC, product: productTable, price: 3100.0, cost: 1968.65 }
@@ -410,6 +411,7 @@ async function main() {
 
     await prisma.clientProductPrice.create({
       data: {
+        manufacturerId: manufacturer.id,
         clientId: cp.client.id,
         productId: cp.product.id,
         sellingPrice: cp.price,
@@ -422,14 +424,14 @@ async function main() {
 
   console.log('Client-specific pricing matrix created.');
 
-  // 8. Historical Sales Transactions (Preserving historical cost invariant)
+  // 8. Historical Sales Transactions
   const saleDates = [
-    new Date(2026, 0, 15), // Jan 15
-    new Date(2026, 0, 28), // Jan 28
-    new Date(2026, 1, 10), // Feb 10
-    new Date(2026, 1, 24), // Feb 24
-    new Date(2026, 2, 5),  // Mar 5
-    new Date(2026, 2, 18)  // Mar 18
+    new Date(2026, 0, 15),
+    new Date(2026, 0, 28),
+    new Date(2026, 1, 10),
+    new Date(2026, 1, 24),
+    new Date(2026, 2, 5),
+    new Date(2026, 2, 18)
   ];
 
   const salesRecords = [
@@ -449,12 +451,13 @@ async function main() {
 
     await prisma.sale.create({
       data: {
+        manufacturerId: manufacturer.id,
         date: s.date,
         clientId: s.client.id,
         productId: s.product.id,
         quantity: s.qty,
         sellingPrice: s.unitSelling,
-        costAtSale: s.costAtSale, // locked historical cost
+        costAtSale: s.costAtSale, 
         revenue: revenue,
         totalCost: totalCost,
         profit: profit,
@@ -470,6 +473,7 @@ async function main() {
   // 9. Initial Cost Change History
   await prisma.costChangeHistory.create({
     data: {
+      manufacturerId: manufacturer.id,
       productId: productChair.id,
       previousCost: 1100.0,
       newCost: 1137.55,
@@ -486,6 +490,7 @@ async function main() {
   // 10. Audit Log
   await prisma.auditLog.create({
     data: {
+      manufacturerId: manufacturer.id,
       userId: adminUser.id,
       action: 'SYSTEM_INITIALIZATION',
       entity: 'System',

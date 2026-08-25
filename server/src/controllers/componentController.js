@@ -1,13 +1,15 @@
 const prisma = require('../lib/prisma');
 const CostCalculationService = require('../lib/CostCalculationService');
 const { toDecimal, calculatePercentageChange } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/components
 const getComponents = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { search, status = 'active', sortBy = 'name', sortOrder = 'asc' } = req.query;
 
-    const where = {};
+    const where = { manufacturerId };
     if (status === 'active') {
       where.isArchived = false;
     } else if (status === 'archived') {
@@ -73,9 +75,10 @@ const getComponents = async (req, res, next) => {
 // GET /api/components/:id
 const getComponentById = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const component = await prisma.component.findUnique({
-      where: { id: Number(id) },
+    const component = await prisma.component.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         materials: {
           include: {
@@ -91,7 +94,7 @@ const getComponentById = async (req, res, next) => {
     });
 
     if (!component) {
-      return res.status(404).json({ error: 'Component not found' });
+      return res.status(404).json({ error: 'Component not found or access denied' });
     }
 
     res.json({
@@ -132,6 +135,7 @@ const getComponentById = async (req, res, next) => {
 // POST /api/components
 const createComponent = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { name, description, additionalCost = 0, materials = [] } = req.body;
 
     if (!name || name.trim() === '') {
@@ -142,13 +146,17 @@ const createComponent = async (req, res, next) => {
       return res.status(400).json({ error: 'At least one raw material is required for the component BOM' });
     }
 
-    // Fetch raw materials to verify rates
-    const rawMaterialIds = materials.map(m => Number(m.rawMaterialId));
+    // Fetch raw materials to verify rates AND tenant ownership
+    const rawMaterialIds = [...new Set(materials.map(m => Number(m.rawMaterialId)))];
     const rawMaterialsList = await prisma.rawMaterial.findMany({
-      where: { id: { in: rawMaterialIds } }
+      where: { id: { in: rawMaterialIds }, manufacturerId }
     });
-    const rmMap = new Map(rawMaterialsList.map(r => [r.id, r]));
 
+    if (rawMaterialsList.length !== rawMaterialIds.length) {
+      return res.status(403).json({ error: 'One or more raw materials do not exist or belong to another manufacturer.' });
+    }
+
+    const rmMap = new Map(rawMaterialsList.map(r => [r.id, r]));
     const calculatedMaterials = [];
     let totalMaterialCost = toDecimal(0);
 
@@ -185,6 +193,7 @@ const createComponent = async (req, res, next) => {
 
     const component = await prisma.component.create({
       data: {
+        manufacturerId,
         name,
         description,
         additionalCost: addCost,
@@ -202,7 +211,8 @@ const createComponent = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'CREATE',
         entity: 'Component',
         entityId: component.id,
@@ -219,25 +229,32 @@ const createComponent = async (req, res, next) => {
 // PUT /api/components/:id
 const updateComponent = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const { name, description, additionalCost = 0, materials = [] } = req.body;
 
-    const existing = await prisma.component.findUnique({
-      where: { id: Number(id) }
+    const existing = await prisma.component.findFirst({
+      where: { id: Number(id), manufacturerId }
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Component not found' });
+      return res.status(404).json({ error: 'Component not found or access denied' });
     }
 
     if (!materials || materials.length === 0) {
       return res.status(400).json({ error: 'At least one raw material is required for the component BOM' });
     }
 
-    const rawMaterialIds = materials.map(m => Number(m.rawMaterialId));
+    // Verify raw materials ownership
+    const rawMaterialIds = [...new Set(materials.map(m => Number(m.rawMaterialId)))];
     const rawMaterialsList = await prisma.rawMaterial.findMany({
-      where: { id: { in: rawMaterialIds } }
+      where: { id: { in: rawMaterialIds }, manufacturerId }
     });
+    
+    if (rawMaterialsList.length !== rawMaterialIds.length) {
+      return res.status(403).json({ error: 'One or more raw materials do not exist or belong to another manufacturer.' });
+    }
+    
     const rmMap = new Map(rawMaterialsList.map(r => [r.id, r]));
 
     const calculatedMaterials = [];
@@ -299,9 +316,10 @@ const updateComponent = async (req, res, next) => {
       });
     });
 
-    // If cost changed, recalculate all parent products!
+    // If cost changed, recalculate all parent products belonging to this manufacturer!
     const parentProducts = await prisma.product.findMany({
       where: {
+        manufacturerId,
         isArchived: false,
         components: { some: { componentId: Number(id) } }
       },
@@ -364,8 +382,8 @@ const updateComponent = async (req, res, next) => {
       });
     }
 
-    const updated = await prisma.component.findUnique({
-      where: { id: Number(id) },
+    const updated = await prisma.component.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         materials: { include: { rawMaterial: true } }
       }
@@ -380,18 +398,20 @@ const updateComponent = async (req, res, next) => {
 // POST /api/components/:id/duplicate
 const duplicateComponent = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const source = await prisma.component.findUnique({
-      where: { id: Number(id) },
+    const source = await prisma.component.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: { materials: true }
     });
 
     if (!source) {
-      return res.status(404).json({ error: 'Component not found' });
+      return res.status(404).json({ error: 'Component not found or access denied' });
     }
 
     const duplicated = await prisma.component.create({
       data: {
+        manufacturerId,
         name: `${source.name} (Copy)`,
         description: source.description,
         additionalCost: source.additionalCost,
@@ -419,18 +439,19 @@ const duplicateComponent = async (req, res, next) => {
 // DELETE /api/components/:id
 const deleteComponent = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const compId = Number(id);
 
-    const existing = await prisma.component.findUnique({
-      where: { id: compId },
+    const existing = await prisma.component.findFirst({
+      where: { id: compId, manufacturerId },
       include: {
         _count: { select: { productComponents: true } }
       }
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Component not found' });
+      return res.status(404).json({ error: 'Component not found or access denied' });
     }
 
     if (existing._count.productComponents > 0) {

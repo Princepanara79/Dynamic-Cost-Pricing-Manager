@@ -1,9 +1,12 @@
 const prisma = require('../lib/prisma');
 const { toDecimal } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/dashboard
 const getDashboardData = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
+    
     const [
       totalProducts,
       totalComponents,
@@ -14,25 +17,27 @@ const getDashboardData = async (req, res, next) => {
       sales,
       clients
     ] = await Promise.all([
-      prisma.product.count({ where: { isArchived: false } }),
-      prisma.component.count({ where: { isArchived: false } }),
-      prisma.rawMaterial.count({ where: { isArchived: false } }),
-      prisma.client.count({ where: { isArchived: false } }),
+      prisma.product.count({ where: { isArchived: false, manufacturerId } }),
+      prisma.component.count({ where: { isArchived: false, manufacturerId } }),
+      prisma.rawMaterial.count({ where: { isArchived: false, manufacturerId } }),
+      prisma.client.count({ where: { isArchived: false, manufacturerId } }),
       prisma.product.findMany({
-        where: { isArchived: false },
+        where: { isArchived: false, manufacturerId },
         include: { clientPrices: true }
       }),
       prisma.rawMaterialPriceHistory.findMany({
+        where: { manufacturerId },
         take: 10,
         orderBy: { changedAt: 'desc' },
         include: { rawMaterial: true }
       }),
       prisma.sale.findMany({
+        where: { manufacturerId },
         orderBy: { date: 'asc' },
         include: { client: true, product: true }
       }),
       prisma.client.findMany({
-        where: { isArchived: false },
+        where: { isArchived: false, manufacturerId },
         include: {
           productPrices: {
             include: { product: true }
@@ -142,6 +147,7 @@ const getDashboardData = async (req, res, next) => {
       let clientProf = 0;
       let clientRev = 0;
       for (const cp of c.productPrices) {
+        if(cp.product.isArchived) continue;
         const prodCost = toDecimal(cp.product.manufacturingCost).toNumber();
         const sellPrice = toDecimal(cp.sellingPrice).toNumber();
         clientProf += (sellPrice - prodCost);

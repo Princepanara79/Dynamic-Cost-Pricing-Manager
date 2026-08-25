@@ -43,6 +43,22 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const register = async (name, email, password, companyName) => {
+    try {
+      const res = await api.post('/auth/register', { name, email, password, companyName });
+      const { token: newToken, user: userData } = res.data;
+      
+      setToken(newToken);
+      localStorage.setItem('token', newToken);
+      setUser(userData);
+      return true;
+    } catch (err) {
+      console.error(err);
+      toast.error(err.response?.data?.error || err.message || 'Registration failed');
+      return false;
+    }
+  };
+
   const logout = () => {
     setToken(null);
     setUser(null);
@@ -52,7 +68,7 @@ export const AuthProvider = ({ children }) => {
   const isAuthenticated = !!token && !!user;
 
   return (
-    <AuthContext.Provider value={{ user, token, isAuthenticated, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, isAuthenticated, login, register, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

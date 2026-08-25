@@ -241,10 +241,11 @@ class CostCalculationService {
   /**
    * Find affected components when a raw material price changes
    */
-  static async findAffectedComponents(rawMaterialId) {
+  static async findAffectedComponents(rawMaterialId, manufacturerId) {
     return prisma.component.findMany({
       where: {
         isArchived: false,
+        manufacturerId,
         materials: {
           some: {
             rawMaterialId: Number(rawMaterialId)
@@ -264,11 +265,12 @@ class CostCalculationService {
   /**
    * Find affected products from a list of component IDs
    */
-  static async findAffectedProducts(componentIds = []) {
+  static async findAffectedProducts(componentIds = [], manufacturerId) {
     if (componentIds.length === 0) return [];
     return prisma.product.findMany({
       where: {
         isArchived: false,
+        manufacturerId,
         components: {
           some: {
             componentId: { in: componentIds.map(Number) }
@@ -302,13 +304,13 @@ class CostCalculationService {
   /**
    * Calculate price impact preview without modifying database
    */
-  static async calculatePriceImpactPreview(rawMaterialId, newPrice) {
-    const rawMaterial = await prisma.rawMaterial.findUnique({
-      where: { id: Number(rawMaterialId) }
+  static async calculatePriceImpactPreview(rawMaterialId, newPrice, manufacturerId) {
+    const rawMaterial = await prisma.rawMaterial.findFirst({
+      where: { id: Number(rawMaterialId), manufacturerId }
     });
 
     if (!rawMaterial) {
-      throw new Error(`Raw material with ID ${rawMaterialId} not found`);
+      throw new Error(`Raw material not found or access denied`);
     }
 
     const oldPrice = toDecimal(rawMaterial.currentPrice);
@@ -316,7 +318,7 @@ class CostCalculationService {
     const priceDiff = targetNewPrice.minus(oldPrice);
     const priceDiffPct = calculatePercentageChange(oldPrice, targetNewPrice);
 
-    const affectedComponents = await this.findAffectedComponents(rawMaterialId);
+    const affectedComponents = await this.findAffectedComponents(rawMaterialId, manufacturerId);
     const componentImpacts = [];
     const componentMap = new Map();
 
@@ -348,7 +350,7 @@ class CostCalculationService {
     }
 
     const componentIds = affectedComponents.map(c => c.id);
-    const affectedProducts = await this.findAffectedProducts(componentIds);
+    const affectedProducts = await this.findAffectedProducts(componentIds, manufacturerId);
     const productImpacts = [];
 
     for (const prod of affectedProducts) {
@@ -439,13 +441,13 @@ class CostCalculationService {
   /**
    * Execute full automated price propagation and update database atomically
    */
-  static async propagateRawMaterialPrice(rawMaterialId, newPrice, userId = null, customReason = null) {
-    const rawMaterial = await prisma.rawMaterial.findUnique({
-      where: { id: Number(rawMaterialId) }
+  static async propagateRawMaterialPrice(rawMaterialId, newPrice, userId = null, customReason = null, manufacturerId) {
+    const rawMaterial = await prisma.rawMaterial.findFirst({
+      where: { id: Number(rawMaterialId), manufacturerId }
     });
 
     if (!rawMaterial) {
-      throw new Error(`Raw material #${rawMaterialId} not found`);
+      throw new Error(`Raw material not found or access denied`);
     }
 
     const oldPrice = toDecimal(rawMaterial.currentPrice);
@@ -472,6 +474,7 @@ class CostCalculationService {
       await tx.rawMaterialPriceHistory.create({
         data: {
           rawMaterialId: rawMaterial.id,
+          manufacturerId,
           previousPrice: oldPrice,
           newPrice: targetNewPrice,
           difference: diff,
@@ -482,7 +485,7 @@ class CostCalculationService {
     });
 
     // 2. Find and recalculate affected components
-    const affectedComponents = await this.findAffectedComponents(rawMaterialId);
+    const affectedComponents = await this.findAffectedComponents(rawMaterialId, manufacturerId);
     const updatedComponents = [];
 
     for (const comp of affectedComponents) {
@@ -525,7 +528,7 @@ class CostCalculationService {
 
     // 3. Find and recalculate affected products
     const componentIds = affectedComponents.map(c => c.id);
-    const affectedProducts = await this.findAffectedProducts(componentIds);
+    const affectedProducts = await this.findAffectedProducts(componentIds, manufacturerId);
     const updatedProducts = [];
 
     for (const prod of affectedProducts) {
@@ -596,6 +599,7 @@ class CostCalculationService {
       await prisma.costChangeHistory.create({
         data: {
           productId: prod.id,
+          manufacturerId,
           previousCost: oldMfgCost,
           newCost: newMfgCost,
           difference: costDiff,
@@ -646,6 +650,7 @@ class CostCalculationService {
     // 4. Record Audit Log
     await prisma.auditLog.create({
       data: {
+        manufacturerId,
         userId,
         action: 'PRICE_PROPAGATION',
         entity: 'RawMaterial',

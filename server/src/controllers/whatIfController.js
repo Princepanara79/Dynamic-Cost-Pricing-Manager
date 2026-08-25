@@ -1,10 +1,12 @@
 const prisma = require('../lib/prisma');
 const CostCalculationService = require('../lib/CostCalculationService');
 const { toDecimal, calculatePercentageChange } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // POST /api/what-if/simulate
 const simulateCost = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const {
       productId,
       rawMaterialPriceOverrides = {}, // { [rawMaterialId]: newPrice }
@@ -21,8 +23,8 @@ const simulateCost = async (req, res, next) => {
       givenSellingPrice
     } = req.body;
 
-    const product = await prisma.product.findUnique({
-      where: { id: Number(productId) },
+    const product = await prisma.product.findFirst({
+      where: { id: Number(productId), manufacturerId },
       include: {
         components: {
           include: {
@@ -40,7 +42,7 @@ const simulateCost = async (req, res, next) => {
     });
 
     if (!product) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
     // Baseline current values
@@ -187,7 +189,9 @@ const simulateCost = async (req, res, next) => {
 // GET /api/what-if/scenarios
 const getScenarios = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const scenarios = await prisma.whatIfScenario.findMany({
+      where: { manufacturerId },
       orderBy: { createdAt: 'desc' }
     });
     res.json(scenarios.map(s => ({
@@ -203,6 +207,7 @@ const getScenarios = async (req, res, next) => {
 // POST /api/what-if/scenarios
 const saveScenario = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { name, description, parameters, results } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Scenario name is required' });
@@ -210,6 +215,7 @@ const saveScenario = async (req, res, next) => {
 
     const scenario = await prisma.whatIfScenario.create({
       data: {
+        manufacturerId,
         name,
         description,
         parameters: JSON.stringify(parameters || {}),
@@ -230,7 +236,17 @@ const saveScenario = async (req, res, next) => {
 // DELETE /api/what-if/scenarios/:id
 const deleteScenario = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
+    
+    const existing = await prisma.whatIfScenario.findFirst({
+      where: { id: Number(id), manufacturerId }
+    });
+    
+    if (!existing) {
+      return res.status(404).json({ error: 'Scenario not found or access denied' });
+    }
+    
     await prisma.whatIfScenario.delete({ where: { id: Number(id) } });
     res.json({ message: 'Scenario deleted successfully' });
   } catch (error) {

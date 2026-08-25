@@ -1,5 +1,6 @@
 const prisma = require('../lib/prisma');
 const { toDecimal } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // Convert array of objects to CSV string
 const jsonToCsv = (items, fields) => {
@@ -18,10 +19,11 @@ const jsonToCsv = (items, fields) => {
 // GET /api/reports/product-cost
 const getProductCostReport = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { format } = req.query;
 
     const products = await prisma.product.findMany({
-      where: { isArchived: false },
+      where: { isArchived: false, manufacturerId },
       orderBy: { name: 'asc' }
     });
 
@@ -90,10 +92,11 @@ const getProductCostReport = async (req, res, next) => {
 // GET /api/reports/material-impact
 const getMaterialImpactReport = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { format } = req.query;
 
     const materials = await prisma.rawMaterial.findMany({
-      where: { isArchived: false },
+      where: { isArchived: false, manufacturerId },
       include: {
         componentMaterials: {
           include: {
@@ -175,10 +178,11 @@ const getMaterialImpactReport = async (req, res, next) => {
 // GET /api/reports/client-profit
 const getClientProfitReport = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { format } = req.query;
 
     const clients = await prisma.client.findMany({
-      where: { isArchived: false },
+      where: { isArchived: false, manufacturerId },
       include: {
         sales: {
           include: { product: true }

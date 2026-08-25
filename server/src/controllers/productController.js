@@ -1,10 +1,12 @@
 const prisma = require('../lib/prisma');
 const CostCalculationService = require('../lib/CostCalculationService');
 const { toDecimal, calculatePercentageChange } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/products
 const getProducts = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const {
       search,
       category,
@@ -14,7 +16,7 @@ const getProducts = async (req, res, next) => {
       sortOrder = 'asc'
     } = req.query;
 
-    const where = {};
+    const where = { manufacturerId };
     if (status === 'active') {
       where.isArchived = false;
     } else if (status === 'archived') {
@@ -108,7 +110,6 @@ const getProducts = async (req, res, next) => {
       };
     });
 
-    // Apply cost filter if requested
     if (costFilter === 'increased') {
       formatted = formatted.filter(p => p.costDifference > 0);
     } else if (costFilter === 'decreased') {
@@ -126,9 +127,10 @@ const getProducts = async (req, res, next) => {
 // GET /api/products/:id
 const getProductById = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const product = await prisma.product.findUnique({
-      where: { id: Number(id) },
+    const product = await prisma.product.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         components: {
           include: {
@@ -155,7 +157,7 @@ const getProductById = async (req, res, next) => {
     });
 
     if (!product) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
     const currentCost = toDecimal(product.manufacturingCost).toNumber();
@@ -167,7 +169,6 @@ const getProductById = async (req, res, next) => {
     const profitMargin = currentSellingPrice > 0 ? (profit / currentSellingPrice) * 100 : 0;
     const markup = currentCost > 0 ? (profit / currentCost) * 100 : 0;
 
-    // Detailed hierarchy tree
     const componentHierarchy = product.components.map(pc => {
       const comp = pc.component;
       const compQty = toDecimal(pc.quantity).toNumber();
@@ -278,6 +279,7 @@ const getProductById = async (req, res, next) => {
 // POST /api/products
 const createProduct = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const {
       name,
       sku,
@@ -307,17 +309,24 @@ const createProduct = async (req, res, next) => {
       return res.status(400).json({ error: 'Product must contain at least one component' });
     }
 
-    // Check unique SKU
-    const existingSku = await prisma.product.findUnique({ where: { sku } });
+    // Check unique SKU for this manufacturer
+    const existingSku = await prisma.product.findUnique({ 
+      where: { manufacturerId_sku: { manufacturerId, sku } } 
+    });
     if (existingSku) {
       return res.status(400).json({ error: `SKU '${sku}' is already in use by another product` });
     }
 
-    // Fetch component details to calculate fresh BOM cost
-    const componentIds = components.map(c => Number(c.componentId));
+    // Ensure components belong to manufacturer
+    const componentIds = [...new Set(components.map(c => Number(c.componentId)))];
     const compList = await prisma.component.findMany({
-      where: { id: { in: componentIds } }
+      where: { id: { in: componentIds }, manufacturerId }
     });
+    
+    if (compList.length !== componentIds.length) {
+      return res.status(403).json({ error: 'One or more components do not exist or belong to another manufacturer.' });
+    }
+    
     const compMap = new Map(compList.map(c => [c.id, c]));
 
     let calculatedProductMatCost = toDecimal(0);
@@ -344,13 +353,11 @@ const createProduct = async (req, res, next) => {
       });
     }
 
-    // Packaging cost calculation
     let packagingCost = toDecimal(manualPackagingCost);
     if (packagingConfigs && packagingConfigs.length > 0) {
       packagingCost = CostCalculationService.calculatePackagingCostPerProduct(packagingConfigs);
     }
 
-    // Manufacturing cost rollup
     const mfgResult = CostCalculationService.calculateManufacturingCost({
       materialCost: calculatedProductMatCost,
       labourCost,
@@ -362,7 +369,6 @@ const createProduct = async (req, res, next) => {
       wastagePct
     });
 
-    // Pricing calculation
     const pricing = CostCalculationService.calculatePricing({
       cost: mfgResult.totalManufacturingCost,
       profitType,
@@ -372,6 +378,7 @@ const createProduct = async (req, res, next) => {
 
     const product = await prisma.product.create({
       data: {
+        manufacturerId,
         name,
         sku,
         category,
@@ -414,7 +421,8 @@ const createProduct = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'CREATE',
         entity: 'Product',
         entityId: product.id,
@@ -431,6 +439,7 @@ const createProduct = async (req, res, next) => {
 // PUT /api/products/:id
 const updateProduct = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const {
       name,
@@ -453,16 +462,18 @@ const updateProduct = async (req, res, next) => {
       givenSellingPrice = null
     } = req.body;
 
-    const existing = await prisma.product.findUnique({
-      where: { id: Number(id) }
+    const existing = await prisma.product.findFirst({
+      where: { id: Number(id), manufacturerId }
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
     if (sku && sku !== existing.sku) {
-      const duplicateSku = await prisma.product.findUnique({ where: { sku } });
+      const duplicateSku = await prisma.product.findUnique({ 
+        where: { manufacturerId_sku: { manufacturerId, sku } } 
+      });
       if (duplicateSku) {
         return res.status(400).json({ error: `SKU '${sku}' is already in use` });
       }
@@ -472,10 +483,16 @@ const updateProduct = async (req, res, next) => {
       return res.status(400).json({ error: 'Product must contain at least one component' });
     }
 
-    const componentIds = components.map(c => Number(c.componentId));
+    // Verify component ownership
+    const componentIds = [...new Set(components.map(c => Number(c.componentId)))];
     const compList = await prisma.component.findMany({
-      where: { id: { in: componentIds } }
+      where: { id: { in: componentIds }, manufacturerId }
     });
+    
+    if (compList.length !== componentIds.length) {
+      return res.status(403).json({ error: 'One or more components do not exist or belong to another manufacturer.' });
+    }
+    
     const compMap = new Map(compList.map(c => [c.id, c]));
 
     let calculatedProductMatCost = toDecimal(0);
@@ -582,8 +599,8 @@ const updateProduct = async (req, res, next) => {
       });
     });
 
-    const updated = await prisma.product.findUnique({
-      where: { id: Number(id) },
+    const updated = await prisma.product.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         components: { include: { component: true } },
         packagingConfig: true
@@ -599,9 +616,10 @@ const updateProduct = async (req, res, next) => {
 // POST /api/products/:id/duplicate
 const duplicateProduct = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const source = await prisma.product.findUnique({
-      where: { id: Number(id) },
+    const source = await prisma.product.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         components: true,
         packagingConfig: true
@@ -609,13 +627,14 @@ const duplicateProduct = async (req, res, next) => {
     });
 
     if (!source) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
     const uniqueSku = `${source.sku}-COPY-${Date.now().toString().slice(-4)}`;
 
     const duplicated = await prisma.product.create({
       data: {
+        manufacturerId,
         name: `${source.name} (Copy)`,
         sku: uniqueSku,
         category: source.category,
@@ -667,18 +686,19 @@ const duplicateProduct = async (req, res, next) => {
 // DELETE /api/products/:id
 const deleteProduct = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const prodId = Number(id);
 
-    const existing = await prisma.product.findUnique({
-      where: { id: prodId },
+    const existing = await prisma.product.findFirst({
+      where: { id: prodId, manufacturerId },
       include: {
         _count: { select: { sales: true } }
       }
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
     if (existing._count.sales > 0) {
@@ -708,10 +728,11 @@ const deleteProduct = async (req, res, next) => {
 // GET /api/products/comparison
 const getProductCostComparison = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { filter = 'all' } = req.query;
 
     const products = await prisma.product.findMany({
-      where: { isArchived: false },
+      where: { isArchived: false, manufacturerId },
       orderBy: { name: 'asc' }
     });
 
@@ -722,7 +743,6 @@ const getProductCostComparison = async (req, res, next) => {
       const diffPct = oldCost > 0 ? Number(((diff / oldCost) * 100).toFixed(2)) : 0;
       const newRec = toDecimal(p.recommendedSellingPrice).toNumber();
       
-      // Calculate old recommended price based on old cost
       const oldPricing = CostCalculationService.calculatePricing({
         cost: oldCost,
         profitType: p.profitType,
@@ -767,7 +787,9 @@ const getProductCostComparison = async (req, res, next) => {
 // GET /api/products/categories
 const getCategories = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const categories = await prisma.product.findMany({
+      where: { manufacturerId },
       select: { category: true },
       distinct: ['category']
     });

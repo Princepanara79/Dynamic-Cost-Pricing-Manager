@@ -13,7 +13,7 @@ const authenticate = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
-      select: { id: true, email: true, name: true, role: true, isActive: true }
+      select: { id: true, email: true, name: true, role: true, manufacturerId: true, isActive: true }
     });
 
     if (!user || !user.isActive) {
@@ -39,4 +39,15 @@ const authorize = (roles = []) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+const getTenantContext = (req) => {
+  if (!req.user) {
+    throw new Error('User not authenticated');
+  }
+  return {
+    userId: req.user.id,
+    manufacturerId: req.user.manufacturerId,
+    role: req.user.role
+  };
+};
+
+module.exports = { authenticate, authorize, getTenantContext };

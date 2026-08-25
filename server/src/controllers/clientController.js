@@ -1,12 +1,14 @@
 const prisma = require('../lib/prisma');
 const { toDecimal } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/clients
 const getClients = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { search, status = 'active', sortBy = 'name', sortOrder = 'asc' } = req.query;
 
-    const where = {};
+    const where = { manufacturerId };
     if (status === 'active') {
       where.isArchived = false;
     } else if (status === 'archived') {
@@ -77,9 +79,10 @@ const getClients = async (req, res, next) => {
 // GET /api/clients/:id
 const getClientById = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const client = await prisma.client.findUnique({
-      where: { id: Number(id) },
+    const client = await prisma.client.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         productPrices: {
           include: { product: true }
@@ -93,7 +96,7 @@ const getClientById = async (req, res, next) => {
     });
 
     if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
+      return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
     const customPrices = client.productPrices.map(cp => {
@@ -158,19 +161,23 @@ const getClientById = async (req, res, next) => {
 // POST /api/clients
 const createClient = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { name, code, contact, email, phone, address, notes } = req.body;
 
     if (!name || !code) {
       return res.status(400).json({ error: 'Client name and unique client code are required' });
     }
 
-    const existing = await prisma.client.findUnique({ where: { code } });
+    const existing = await prisma.client.findUnique({ 
+      where: { manufacturerId_code: { manufacturerId, code } } 
+    });
     if (existing) {
-      return res.status(400).json({ error: `Client code '${code}' is already registered` });
+      return res.status(400).json({ error: `Client code '${code}' is already registered in your account` });
     }
 
     const client = await prisma.client.create({
       data: {
+        manufacturerId,
         name,
         code,
         contact,
@@ -183,7 +190,8 @@ const createClient = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'CREATE',
         entity: 'Client',
         entityId: client.id,
@@ -200,16 +208,22 @@ const createClient = async (req, res, next) => {
 // PUT /api/clients/:id
 const updateClient = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const { name, code, contact, email, phone, address, notes, status } = req.body;
 
-    const existing = await prisma.client.findUnique({ where: { id: Number(id) } });
+    const existing = await prisma.client.findFirst({ 
+      where: { id: Number(id), manufacturerId } 
+    });
+    
     if (!existing) {
-      return res.status(404).json({ error: 'Client not found' });
+      return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
     if (code && code !== existing.code) {
-      const codeCheck = await prisma.client.findUnique({ where: { code } });
+      const codeCheck = await prisma.client.findUnique({ 
+        where: { manufacturerId_code: { manufacturerId, code } } 
+      });
       if (codeCheck) {
         return res.status(400).json({ error: `Client code '${code}' is already registered` });
       }
@@ -239,18 +253,19 @@ const updateClient = async (req, res, next) => {
 // DELETE /api/clients/:id
 const deleteClient = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const clientId = Number(id);
 
-    const existing = await prisma.client.findUnique({
-      where: { id: clientId },
+    const existing = await prisma.client.findFirst({
+      where: { id: clientId, manufacturerId },
       include: {
         _count: { select: { sales: true } }
       }
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Client not found' });
+      return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
     if (existing._count.sales > 0) {
@@ -278,8 +293,10 @@ const deleteClient = async (req, res, next) => {
 // GET /api/clients/profit-analysis (Matrix across all clients & products)
 const getAllClientsProfitAnalysis = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
+    
     const clients = await prisma.client.findMany({
-      where: { isArchived: false },
+      where: { isArchived: false, manufacturerId },
       include: {
         productPrices: {
           include: { product: true }

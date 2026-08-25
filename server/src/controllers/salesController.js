@@ -1,12 +1,14 @@
 const prisma = require('../lib/prisma');
 const { toDecimal } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/sales
 const getSales = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { clientId, productId, startDate, endDate, search, sortBy = 'date', sortOrder = 'desc' } = req.query;
 
-    const where = {};
+    const where = { manufacturerId };
     if (clientId) where.clientId = Number(clientId);
     if (productId) where.productId = Number(productId);
 
@@ -65,20 +67,25 @@ const getSales = async (req, res, next) => {
 // POST /api/sales
 const createSale = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { clientId, productId, quantity, sellingPrice, date, notes } = req.body;
 
     if (!clientId || !productId || !quantity || Number(quantity) <= 0) {
       return res.status(400).json({ error: 'Client, Product, and valid quantity (> 0) are required' });
     }
 
-    const product = await prisma.product.findUnique({ where: { id: Number(productId) } });
+    const product = await prisma.product.findFirst({ 
+      where: { id: Number(productId), manufacturerId } 
+    });
     if (!product) {
-      return res.status(404).json({ error: 'Product not found' });
+      return res.status(404).json({ error: 'Product not found or access denied' });
     }
 
-    const client = await prisma.client.findUnique({ where: { id: Number(clientId) } });
+    const client = await prisma.client.findFirst({ 
+      where: { id: Number(clientId), manufacturerId } 
+    });
     if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
+      return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
     // Determine selling price: user specified > client price override > recommended price
@@ -115,6 +122,7 @@ const createSale = async (req, res, next) => {
 
     const sale = await prisma.sale.create({
       data: {
+        manufacturerId,
         date: date ? new Date(date) : new Date(),
         clientId: Number(clientId),
         productId: Number(productId),
@@ -126,7 +134,7 @@ const createSale = async (req, res, next) => {
         profit,
         profitMargin,
         notes,
-        userId: req.user?.id
+        userId
       },
       include: {
         client: true,
@@ -136,7 +144,8 @@ const createSale = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'RECORD_SALE',
         entity: 'Sale',
         entityId: sale.id,
@@ -166,7 +175,10 @@ const createSale = async (req, res, next) => {
 // GET /api/sales/analytics
 const getSalesAnalytics = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
+    
     const sales = await prisma.sale.findMany({
+      where: { manufacturerId },
       include: { client: true, product: true },
       orderBy: { date: 'asc' }
     });

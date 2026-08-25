@@ -1,13 +1,15 @@
 const prisma = require('../lib/prisma');
 const CostCalculationService = require('../lib/CostCalculationService');
 const { toDecimal, calculatePercentageChange } = require('../utils/decimalUtils');
+const { getTenantContext } = require('../middleware/auth');
 
 // GET /api/raw-materials
 const getRawMaterials = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { search, category, status = 'active', sortBy = 'name', sortOrder = 'asc' } = req.query;
 
-    const where = {};
+    const where = { manufacturerId };
     if (status === 'active') {
       where.isArchived = false;
     } else if (status === 'archived') {
@@ -54,9 +56,10 @@ const getRawMaterials = async (req, res, next) => {
 // GET /api/raw-materials/:id
 const getRawMaterialById = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
-    const rawMaterial = await prisma.rawMaterial.findUnique({
-      where: { id: Number(id) },
+    const rawMaterial = await prisma.rawMaterial.findFirst({
+      where: { id: Number(id), manufacturerId },
       include: {
         priceHistory: {
           orderBy: { changedAt: 'desc' },
@@ -79,7 +82,7 @@ const getRawMaterialById = async (req, res, next) => {
     });
 
     if (!rawMaterial) {
-      return res.status(404).json({ error: 'Raw material not found' });
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
     }
 
     // Extract unique affected components and products
@@ -135,6 +138,7 @@ const getRawMaterialById = async (req, res, next) => {
 // POST /api/raw-materials
 const createRawMaterial = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { name, category, unit, currentPrice, description } = req.body;
 
     if (!name || !category || !unit || currentPrice === undefined || currentPrice === null) {
@@ -148,6 +152,7 @@ const createRawMaterial = async (req, res, next) => {
 
     const newMaterial = await prisma.rawMaterial.create({
       data: {
+        manufacturerId,
         name,
         category,
         unit: unit.toLowerCase(),
@@ -155,6 +160,7 @@ const createRawMaterial = async (req, res, next) => {
         description,
         priceHistory: {
           create: {
+            manufacturerId,
             previousPrice: price,
             newPrice: price,
             difference: 0,
@@ -166,7 +172,8 @@ const createRawMaterial = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'CREATE',
         entity: 'RawMaterial',
         entityId: newMaterial.id,
@@ -187,12 +194,13 @@ const createRawMaterial = async (req, res, next) => {
 // PUT /api/raw-materials/:id
 const updateRawMaterial = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { id } = req.params;
     const { name, category, unit, description } = req.body;
 
-    const existing = await prisma.rawMaterial.findUnique({ where: { id: Number(id) } });
+    const existing = await prisma.rawMaterial.findFirst({ where: { id: Number(id), manufacturerId } });
     if (!existing) {
-      return res.status(404).json({ error: 'Raw material not found' });
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
     }
 
     const updated = await prisma.rawMaterial.update({
@@ -207,7 +215,8 @@ const updateRawMaterial = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'UPDATE',
         entity: 'RawMaterial',
         entityId: updated.id,
@@ -229,14 +238,21 @@ const updateRawMaterial = async (req, res, next) => {
 // GET /api/raw-materials/:id/impact-preview?newPrice=...
 const previewPriceImpact = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
     const { newPrice } = req.query;
 
     if (!newPrice || isNaN(Number(newPrice))) {
       return res.status(400).json({ error: 'Valid newPrice query parameter is required' });
     }
+    
+    // Ensure the material belongs to this manufacturer
+    const existing = await prisma.rawMaterial.findFirst({ where: { id: Number(id), manufacturerId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
+    }
 
-    const impact = await CostCalculationService.calculatePriceImpactPreview(id, newPrice);
+    const impact = await CostCalculationService.calculatePriceImpactPreview(id, newPrice, manufacturerId);
     res.json(impact);
   } catch (error) {
     next(error);
@@ -246,6 +262,7 @@ const previewPriceImpact = async (req, res, next) => {
 // PUT /api/raw-materials/:id/price
 const updatePrice = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { id } = req.params;
     const { newPrice, reason } = req.body;
 
@@ -257,12 +274,19 @@ const updatePrice = async (req, res, next) => {
     if (price.isNegative()) {
       return res.status(400).json({ error: 'Price cannot be negative' });
     }
+    
+    // Ensure the material belongs to this manufacturer
+    const existing = await prisma.rawMaterial.findFirst({ where: { id: Number(id), manufacturerId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
+    }
 
     const result = await CostCalculationService.propagateRawMaterialPrice(
       id,
       price,
-      req.user?.id,
-      reason
+      userId,
+      reason,
+      manufacturerId
     );
 
     res.json({
@@ -277,11 +301,12 @@ const updatePrice = async (req, res, next) => {
 // DELETE /api/raw-materials/:id (archive/soft-delete if used)
 const deleteRawMaterial = async (req, res, next) => {
   try {
+    const { manufacturerId, userId } = getTenantContext(req);
     const { id } = req.params;
     const materialId = Number(id);
 
-    const existing = await prisma.rawMaterial.findUnique({
-      where: { id: materialId },
+    const existing = await prisma.rawMaterial.findFirst({
+      where: { id: materialId, manufacturerId },
       include: {
         _count: {
           select: { componentMaterials: true }
@@ -290,7 +315,7 @@ const deleteRawMaterial = async (req, res, next) => {
     });
 
     if (!existing) {
-      return res.status(404).json({ error: 'Raw material not found' });
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
     }
 
     // If material is used in components, do not hard-delete; archive it.
@@ -306,7 +331,8 @@ const deleteRawMaterial = async (req, res, next) => {
 
       await prisma.auditLog.create({
         data: {
-          userId: req.user?.id,
+          manufacturerId,
+          userId,
           action: 'ARCHIVE',
           entity: 'RawMaterial',
           entityId: materialId,
@@ -322,12 +348,13 @@ const deleteRawMaterial = async (req, res, next) => {
     }
 
     // Otherwise safe hard delete
-    await prisma.rawMaterialPriceHistory.deleteMany({ where: { rawMaterialId: materialId } });
+    await prisma.rawMaterialPriceHistory.deleteMany({ where: { rawMaterialId: materialId, manufacturerId } });
     await prisma.rawMaterial.delete({ where: { id: materialId } });
 
     await prisma.auditLog.create({
       data: {
-        userId: req.user?.id,
+        manufacturerId,
+        userId,
         action: 'DELETE',
         entity: 'RawMaterial',
         entityId: materialId,
@@ -344,9 +371,16 @@ const deleteRawMaterial = async (req, res, next) => {
 // GET /api/raw-materials/:id/history
 const getPriceHistory = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const { id } = req.params;
+    
+    const existing = await prisma.rawMaterial.findFirst({ where: { id: Number(id), manufacturerId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Raw material not found or access denied' });
+    }
+    
     const history = await prisma.rawMaterialPriceHistory.findMany({
-      where: { rawMaterialId: Number(id) },
+      where: { rawMaterialId: Number(id), manufacturerId },
       orderBy: { changedAt: 'asc' }
     });
 
@@ -369,7 +403,9 @@ const getPriceHistory = async (req, res, next) => {
 // GET /api/raw-materials/categories
 const getCategories = async (req, res, next) => {
   try {
+    const { manufacturerId } = getTenantContext(req);
     const categories = await prisma.rawMaterial.findMany({
+      where: { manufacturerId },
       select: { category: true },
       distinct: ['category']
     });

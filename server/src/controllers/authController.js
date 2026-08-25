@@ -10,7 +10,7 @@ const register = async (req, res, next) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, password, name, role } = req.body;
+    const { email, password, name, companyName } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
@@ -19,22 +19,37 @@ const register = async (req, res, next) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name,
-        role: role || 'user'
-      }
+    // Create Manufacturer / Tenant and User in a transaction
+    const result = await prisma.$transaction(async (tx) => {
+      const manufacturer = await tx.manufacturer.create({
+        data: {
+          name: companyName || `${name}'s Manufacturing`,
+        }
+      });
+
+      const user = await tx.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          name,
+          role: 'manufacturer_admin',
+          manufacturerId: manufacturer.id
+        }
+      });
+      return { manufacturer, user };
     });
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN
-    });
+    const { user } = result;
+
+    const token = jwt.sign(
+      { id: user.id, manufacturerId: user.manufacturerId, role: user.role }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
 
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, manufacturerId: user.manufacturerId }
     });
   } catch (error) {
     next(error);
@@ -60,13 +75,15 @@ const login = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN
-    });
+    const token = jwt.sign(
+      { id: user.id, manufacturerId: user.manufacturerId, role: user.role }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, manufacturerId: user.manufacturerId }
     });
   } catch (error) {
     next(error);
