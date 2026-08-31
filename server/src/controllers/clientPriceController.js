@@ -5,8 +5,9 @@ const { toDecimal } = require('../utils/decimalUtils');
 const getClientPrices = async (req, res, next) => {
   try {
     const { clientId, productId } = req.query;
+    const manufacturerId = req.user.manufacturerId;
 
-    const where = {};
+    const where = { manufacturerId };
     if (clientId) where.clientId = Number(clientId);
     if (productId) where.productId = Number(productId);
 
@@ -59,6 +60,7 @@ const getClientPrices = async (req, res, next) => {
 const upsertClientPrice = async (req, res, next) => {
   try {
     const { clientId, productId, sellingPrice } = req.body;
+    const manufacturerId = req.user.manufacturerId;
 
     if (!clientId || !productId || sellingPrice === undefined || isNaN(Number(sellingPrice))) {
       return res.status(400).json({ error: 'Client ID, Product ID, and valid selling price are required' });
@@ -69,12 +71,12 @@ const upsertClientPrice = async (req, res, next) => {
       return res.status(400).json({ error: 'Selling price cannot be negative' });
     }
 
-    const product = await prisma.product.findUnique({ where: { id: Number(productId) } });
+    const product = await prisma.product.findFirst({ where: { id: Number(productId), manufacturerId } });
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    const client = await prisma.client.findUnique({ where: { id: Number(clientId) } });
+    const client = await prisma.client.findFirst({ where: { id: Number(clientId), manufacturerId } });
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -84,12 +86,13 @@ const upsertClientPrice = async (req, res, next) => {
     const markup = cost.greaterThan(0) ? profit.dividedBy(cost).times(100) : toDecimal(0);
     const margin = price.greaterThan(0) ? profit.dividedBy(price).times(100) : toDecimal(0);
 
-    const existing = await prisma.clientProductPrice.findUnique({
+    const existing = await prisma.clientProductPrice.findFirst({
       where: {
         clientId_productId: {
           clientId: Number(clientId),
           productId: Number(productId)
-        }
+        },
+        manufacturerId
       }
     });
 
@@ -102,6 +105,7 @@ const upsertClientPrice = async (req, res, next) => {
 
       await prisma.clientPriceHistory.create({
         data: {
+          manufacturerId,
           clientId: Number(clientId),
           productId: Number(productId),
           previousPrice: oldPrice,
@@ -125,6 +129,7 @@ const upsertClientPrice = async (req, res, next) => {
     } else {
       result = await prisma.clientProductPrice.create({
         data: {
+          manufacturerId,
           clientId: Number(clientId),
           productId: Number(productId),
           sellingPrice: price,
@@ -138,6 +143,7 @@ const upsertClientPrice = async (req, res, next) => {
 
     await prisma.auditLog.create({
       data: {
+        manufacturerId,
         userId: req.user?.id,
         action: existing ? 'UPDATE_CLIENT_PRICE' : 'CREATE_CLIENT_PRICE',
         entity: 'ClientProductPrice',
@@ -166,6 +172,16 @@ const upsertClientPrice = async (req, res, next) => {
 const deleteClientPrice = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const manufacturerId = req.user.manufacturerId;
+
+    const existing = await prisma.clientProductPrice.findFirst({
+      where: { id: Number(id), manufacturerId }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Client price not found' });
+    }
+
     await prisma.clientProductPrice.delete({ where: { id: Number(id) } });
     res.json({ message: 'Client price custom override removed' });
   } catch (error) {

@@ -12,9 +12,9 @@ const {
 router.use(authenticate);
 
 router.get('/', getSettings);
-router.put('/', authorize(['admin']), updateSettings);
-router.get('/users', authorize(['admin']), getUsers);
-router.post('/users', authorize(['admin']), createUser);
-router.get('/audit-logs', authorize(['admin']), getAuditLogs);
+router.put('/', authorize(['manufacturer_admin', 'super_admin']), updateSettings);
+router.get('/users', authorize(['manufacturer_admin', 'super_admin']), getUsers);
+router.post('/users', authorize(['manufacturer_admin', 'super_admin']), createUser);
+router.get('/audit-logs', authorize(['manufacturer_admin', 'super_admin']), getAuditLogs);
 
 module.exports = router;

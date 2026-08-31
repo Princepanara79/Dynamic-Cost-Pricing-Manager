@@ -15,8 +15,8 @@ router.use(authenticate);
 router.get('/profit-analysis', getAllClientsProfitAnalysis);
 router.get('/', getClients);
 router.get('/:id', getClientById);
-router.post('/', authorize(['admin', 'user']), createClient);
-router.put('/:id', authorize(['admin', 'user']), updateClient);
-router.delete('/:id', authorize(['admin']), deleteClient);
+router.post('/', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), createClient);
+router.put('/:id', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), updateClient);
+router.delete('/:id', authorize(['manufacturer_admin', 'super_admin']), deleteClient);
 
 module.exports = router;

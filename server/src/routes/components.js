@@ -14,9 +14,9 @@ router.use(authenticate);
 
 router.get('/', getComponents);
 router.get('/:id', getComponentById);
-router.post('/', authorize(['admin', 'user']), createComponent);
-router.put('/:id', authorize(['admin', 'user']), updateComponent);
-router.post('/:id/duplicate', authorize(['admin', 'user']), duplicateComponent);
-router.delete('/:id', authorize(['admin']), deleteComponent);
+router.post('/', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), createComponent);
+router.put('/:id', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), updateComponent);
+router.post('/:id/duplicate', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), duplicateComponent);
+router.delete('/:id', authorize(['manufacturer_admin', 'super_admin']), deleteComponent);
 
 module.exports = router;

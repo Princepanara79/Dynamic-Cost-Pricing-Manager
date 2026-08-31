@@ -14,13 +14,34 @@ const reportsRoutes = require('./routes/reports');
 const settingsRoutes = require('./routes/settings');
 const errorHandler = require('./middleware/errorHandler');
 
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 
+app.use(helmet());
+
+const allowedOrigins = process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : [];
 app.use(cors({
-  origin: true,
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // limit each IP to 20 requests per windowMs for auth
+  message: { error: 'Too many requests from this IP, please try again later.' }
+});
+
+// Apply rate limiter to auth routes
+app.use('/api/auth', authLimiter, authRoutes);
 
 // Health Check
 app.get('/api/health', (req, res) => {
@@ -32,7 +53,6 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/auth', authRoutes);
 app.use('/api/raw-materials', rawMaterialRoutes);
 app.use('/api/components', componentRoutes);
 app.use('/api/products', productRoutes);

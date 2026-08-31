@@ -44,7 +44,7 @@ const register = async (req, res, next) => {
     const token = jwt.sign(
       { id: user.id, manufacturerId: user.manufacturerId, role: user.role }, 
       process.env.JWT_SECRET, 
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
     res.status(201).json({
@@ -78,7 +78,7 @@ const login = async (req, res, next) => {
     const token = jwt.sign(
       { id: user.id, manufacturerId: user.manufacturerId, role: user.role }, 
       process.env.JWT_SECRET, 
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
     res.json({

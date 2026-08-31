@@ -21,9 +21,9 @@ router.get('/:id', getRawMaterialById);
 router.get('/:id/history', getPriceHistory);
 router.get('/:id/impact-preview', previewPriceImpact);
 
-router.post('/', authorize(['admin', 'user']), createRawMaterial);
-router.put('/:id', authorize(['admin', 'user']), updateRawMaterial);
-router.put('/:id/price', authorize(['admin', 'user']), updatePrice);
-router.delete('/:id', authorize(['admin']), deleteRawMaterial);
+router.post('/', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), createRawMaterial);
+router.put('/:id', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), updateRawMaterial);
+router.put('/:id/price', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), updatePrice);
+router.delete('/:id', authorize(['manufacturer_admin', 'super_admin']), deleteRawMaterial);
 
 module.exports = router;

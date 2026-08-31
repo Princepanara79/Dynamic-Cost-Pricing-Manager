@@ -10,7 +10,7 @@ const {
 router.use(authenticate);
 
 router.get('/', getClientPrices);
-router.post('/', authorize(['admin', 'user']), upsertClientPrice);
-router.delete('/:id', authorize(['admin']), deleteClientPrice);
+router.post('/', authorize(['manufacturer_admin', 'manufacturer', 'super_admin']), upsertClientPrice);
+router.delete('/:id', authorize(['manufacturer_admin', 'super_admin']), deleteClientPrice);
 
 module.exports = router;
